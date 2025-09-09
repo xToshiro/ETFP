@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Precificação de Transportes v8</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .path-selected { stroke: #FBBF24 !important; stroke-width: 5 !important; }
+        .path-casing { fill: none; stroke-width: 20; stroke: transparent; cursor: pointer; }
+        .path-road { fill: none; stroke-width: 8; stroke-linecap: round; pointer-events: none; transition: stroke 0.3s ease; }
+        aside::-webkit-scrollbar { width: 8px; }
+        aside::-webkit-scrollbar-track { background: #1f2937; }
+        aside::-webkit-scrollbar-thumb { background-color: #374151; border-radius: 20px; }
+        .chart-container { position: relative; height: 200px; width: 100%; }
+    </style>
+</head>
+<body class="bg-gray-800 text-white flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <!-- BARRA LATERAL -->
+    <aside class="w-full md:w-[400px] bg-gray-900 p-4 shadow-2xl overflow-y-auto h-auto md:h-full flex flex-col">
+        <h1 class="text-2xl font-bold mb-4 text-cyan-400 text-center md:text-left">Simulador de Tráfego</h1>
+
+        <div id="config-panel" class="flex-grow">
+            <!-- Grupos de Viajantes -->
+            <div class="mb-4">
+                <h2 class="text-lg font-semibold mb-3 border-b border-gray-700 pb-2">Grupos de Viajantes</h2>
+                <div id="agent-types-list" class="space-y-4"></div>
+                <button id="add-agent-type" class="mt-4 w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg transition">
+                    + Adicionar Grupo
+                </button>
+            </div>
+
+            <!-- Configuração da Via -->
+            <div id="path-config-section" class="p-4 bg-gray-800 rounded-lg hidden mt-4">
+                <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Via: <span id="selected-path-name" class="text-amber-400"></span></h2>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300">Pedágio Base (R$): <span id="path-toll-value" class="text-amber-400 font-mono"></span></label>
+                        <input type="range" id="path-toll" min="0" max="50" step="0.50" class="w-full h-2 bg-gray-700 rounded-lg">
+                    </div>
+                    <div id="variable-toll-option" class="hidden items-center">
+                         <input type="checkbox" id="variable-toll-checkbox" class="h-4 w-4 rounded bg-gray-700 border-gray-600 text-cyan-600 focus:ring-cyan-500">
+                         <label for="variable-toll-checkbox" class="ml-2 text-sm text-gray-300">Habilitar pedágio variável</label>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300">Capacidade (veic/min): <span id="path-capacity-value" class="text-amber-400 font-mono"></span></label>
+                        <input type="range" id="path-capacity" min="50" max="500" step="10" class="w-full h-2 bg-gray-700 rounded-lg">
+                    </div>
+                    <p class="text-sm font-medium text-gray-300">Comprimento: <span id="path-length-value" class="text-amber-400 font-mono"></span></p>
+                </div>
+            </div>
+            <div id="no-path-selected" class="p-4 bg-gray-800 rounded-lg text-center mt-4">
+                <p class="text-gray-400">Clique em uma via para configurar.</p>
+            </div>
+            
+            <!-- Gráficos -->
+            <div class="mt-4">
+                <h2 class="text-lg font-semibold mb-3 border-b border-gray-700 pb-2">Análise em Tempo Real</h2>
+                <div class="space-y-4">
+                     <div>
+                        <h3 class="text-md font-semibold mb-2 text-gray-300">Custo por Rota (Ref.)</h3>
+                        <div class="chart-container bg-gray-800 p-2 rounded-lg">
+                            <canvas id="cost-chart"></canvas>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-md font-semibold mb-2 text-gray-300">Congestionamento (V/C)</h3>
+                        <div class="chart-container bg-gray-800 p-2 rounded-lg">
+                            <canvas id="congestion-chart"></canvas>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-md font-semibold mb-2 text-gray-300">Custo Médio por Grupo</h3>
+                        <div class="chart-container bg-gray-800 p-2 rounded-lg">
+                            <canvas id="group-cost-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controles da Simulação -->
+        <div class="mt-6 space-y-2">
+            <button id="run-simulation" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition text-lg">
+                Iniciar Simulação
+            </button>
+            <button id="reset-simulation" class="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition">
+                Resetar
+            </button>
+            <div id="simulation-results" class="mt-2 text-sm"></div>
+        </div>
+    </aside>
+
+    <!-- MAPA -->
+    <main class="flex-1 flex items-center justify-center p-2 md:p-6 relative bg-gray-700">
+        <div class="absolute top-4 left-4 text-center p-3 bg-gray-900 rounded-lg shadow-lg z-10"><h3 class="text-lg font-bold text-green-400">ORIGEM</h3></div>
+        <div class="absolute top-4 right-4 text-center p-3 bg-gray-900 rounded-lg shadow-lg z-10"><h3 class="text-lg font-bold text-red-400">DESTINO</h3></div>
+        <div id="map-container" class="w-full h-full"></div>
+    </main>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- ELEMENTOS DA UI ---
+        const agentTypesList = document.getElementById('agent-types-list');
+        const addAgentTypeButton = document.getElementById('add-agent-type');
+        const pathConfigSection = document.getElementById('path-config-section');
+        const noPathSelectedDiv = document.getElementById('no-path-selected');
+        const selectedPathName = document.getElementById('selected-path-name');
+        const pathTollSlider = document.getElementById('path-toll');
+        const pathTollValue = document.getElementById('path-toll-value');
+        const variableTollOption = document.getElementById('variable-toll-option');
+        const variableTollCheckbox = document.getElementById('variable-toll-checkbox');
+        const pathCapacitySlider = document.getElementById('path-capacity');
+        const pathCapacityValue = document.getElementById('path-capacity-value');
+        const pathLengthValue = document.getElementById('path-length-value');
+        const runSimulationButton = document.getElementById('run-simulation');
+        const resetSimulationButton = document.getElementById('reset-simulation');
+        const simulationResultsDiv = document.getElementById('simulation-results');
+        const mapContainer = document.getElementById('map-container');
+        const costChartCanvas = document.getElementById('cost-chart');
+        const congestionChartCanvas = document.getElementById('congestion-chart');
+        const groupCostChartCanvas = document.getElementById('group-cost-chart');
+
+        // --- ESTADO DA APLICAÇÃO ---
+        let selectedPathId = null;
+        let agentTypes = [];
+        let nextAgentTypeId = 1;
+        let svg, agentsLayer, costChart, congestionChart, groupCostChart;
+
+        const intersectionsData = [
+            { id: 'int1', x: 300, y: 300, delaySeconds: 15 },
+            { id: 'int2', x: 700, y: 300, delaySeconds: 20 },
+            { id: 'int3', x: 500, y: 150, delaySeconds: 10 }
+        ];
+
+        const pathsData = [
+            { id: 'path-1', name: 'Via Expressa', d: "M 50 150 H 500 V 300 H 950", toll: 15.0, capacity: 200, lengthKm: 25, baseSpeed: 100, intersections: ['int3'], isVariableToll: true },
+            { id: 'path-2', name: 'Avenida Central', d: "M 50 300 H 950", toll: 5.0, capacity: 300, lengthKm: 20, baseSpeed: 60, intersections: ['int1', 'int2'], isVariableToll: false },
+            { id: 'path-3', name: 'Contorno Sul', d: "M 50 300 V 450 H 950", toll: 2.0, capacity: 250, lengthKm: 30, baseSpeed: 80, intersections: [], isVariableToll: false },
+            { id: 'path-4', name: 'Malha Urbana', d: "M 50 300 H 300 V 450 H 700 V 300 H 950", toll: 8.0, capacity: 120, lengthKm: 28, baseSpeed: 45, intersections: ['int1', 'int2'], isVariableToll: false },
+        ];
+        
+        const simulation = { 
+            isRunning: false, 
+            agents: [], 
+            agentPool: [],
+            totalAgentCount: 0,
+            animationFrameId: null, 
+            pathStats: {},
+            time: 0
+        };
+
+        // --- INICIALIZAÇÃO E MAPA ---
+        function createMap() {
+            const svgNS = "http://www.w3.org/2000/svg";
+            svg = document.createElementNS(svgNS, "svg");
+            svg.setAttribute('viewBox', '0 0 1000 600');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+            
+            pathsData.forEach(path => {
+                const group = document.createElementNS(svgNS, 'g');
+                const road = document.createElementNS(svgNS, 'path');
+                road.setAttribute('id', path.id);
+                road.setAttribute('d', path.d);
+                road.setAttribute('class', 'path-road');
+                const casing = document.createElementNS(svgNS, 'path');
+                casing.setAttribute('d', path.d);
+                casing.setAttribute('class', 'path-casing');
+                casing.addEventListener('click', () => selectPath(path.id));
+                group.append(road, casing);
+                svg.appendChild(group);
+            });
+
+            intersectionsData.forEach(inter => {
+                const circle = document.createElementNS(svgNS, 'circle');
+                circle.setAttribute('cx', inter.x);
+                circle.setAttribute('cy', inter.y);
+                circle.setAttribute('r', '15');
+                circle.setAttribute('fill', '#374151');
+                circle.setAttribute('stroke', '#6b7280');
+                circle.setAttribute('stroke-width', '2');
+                svg.appendChild(circle);
+            });
+            
+            agentsLayer = document.createElementNS(svgNS, 'g');
+            svg.appendChild(agentsLayer);
+            mapContainer.innerHTML = '';
+            mapContainer.appendChild(svg);
+            
+            pathsData.forEach(path => {
+                path.element = document.getElementById(path.id);
+                path.pathLength = path.element.getTotalLength();
+            });
+            updateAllPathColors();
+        }
+
+        function updateAllPathColors() {
+            pathsData.forEach(path => {
+                if(path.element) path.element.setAttribute('stroke', '#6b7280');
+            });
+        }
+        
+        // --- GRÁFICOS ---
+        function createChart(canvas, yAxisLabel, datasets) {
+            return new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'linear', title: { display: true, text: 'Tempo (s)', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: '#4b5563' } },
+                        y: { title: { display: true, text: yAxisLabel, color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: '#4b5563' } }
+                    },
+                    plugins: { legend: { labels: { color: '#d1d5db' } } }
+                }
+            });
+        }
+        
+        function initializeCharts() {
+            const pathDatasets = pathsData.map(path => ({
+                label: path.name, data: [], borderColor: `hsl(${parseInt(path.id.split('-')[1]) * 80}, 90%, 60%)`, borderWidth: 2, fill: false, tension: 0.1
+            }));
+            costChart = createChart(costChartCanvas, 'Custo Percebido (R$)', pathDatasets);
+            congestionChart = createChart(congestionChartCanvas, 'Congestionamento (V/C)', JSON.parse(JSON.stringify(pathDatasets))); // Deep copy
+
+            // Group cost chart is initialized with empty datasets, will be populated dynamically
+            groupCostChart = createChart(groupCostChartCanvas, 'Custo Médio (R$)', []);
+        }
+        
+        function updateCharts() {
+            if (!costChart || !congestionChart || !groupCostChart) return;
+
+            const referenceAgent = agentTypes[0] || { income: 50, valueOfTime: 30 };
+            const currentTime = simulation.time / 60; // Frames para segundos
+
+            const addDataPoint = (chart, datasetIndex, newData) => {
+                const dataset = chart.data.datasets[datasetIndex];
+                if (dataset.data.length > 100) dataset.data.shift();
+                dataset.data.push(newData);
+            };
+
+            // Update Path-based charts
+            pathsData.forEach((path, index) => {
+                const stats = simulation.pathStats[path.id];
+                const v_c = stats.currentAgents / path.capacity;
+                const cost = calculatePathCost(path, referenceAgent);
+                addDataPoint(costChart, index, { x: currentTime, y: cost });
+                addDataPoint(congestionChart, index, { x: currentTime, y: v_c });
+            });
+
+            // Update Group-based chart
+            // Sync datasets with current agent types
+            if (groupCostChart.data.datasets.length !== agentTypes.length) {
+                groupCostChart.data.datasets = agentTypes.map(type => ({
+                    label: type.name, data: [], borderColor: type.color, borderWidth: 2, fill: false, tension: 0.1
+                }));
+            }
+            
+            const groupStats = {};
+            agentTypes.forEach(type => {
+                groupStats[type.id] = { totalCost: 0, agentCount: 0 };
+                // Update dataset label and color in case it changed
+                const dataset = groupCostChart.data.datasets.find(d => d.label === type.name);
+                if (dataset) {
+                    dataset.borderColor = type.color;
+                    dataset.label = type.name;
+                }
+            });
+
+            simulation.agents.forEach(agent => {
+                const type = agent.agentType;
+                const path = pathsData.find(p => p.id === agent.pathId);
+                if (type && path && groupStats[type.id]) {
+                    groupStats[type.id].totalCost += calculatePathCost(path, type);
+                    groupStats[type.id].agentCount++;
+                }
+            });
+
+            agentTypes.forEach((type, index) => {
+                const stats = groupStats[type.id];
+                const averageCost = stats.agentCount > 0 ? stats.totalCost / stats.agentCount : 0;
+                 if (groupCostChart.data.datasets[index]) {
+                     addDataPoint(groupCostChart, index, { x: currentTime, y: averageCost });
+                 }
+            });
+
+            costChart.update('quiet');
+            congestionChart.update('quiet');
+            groupCostChart.update('quiet');
+        }
+
+        function resetCharts() {
+            simulation.time = 0;
+            [costChart, congestionChart, groupCostChart].forEach(chart => {
+                if (chart) {
+                    chart.data.datasets.forEach(dataset => dataset.data = []);
+                    chart.update();
+                }
+            });
+        }
+
+        // --- GESTÃO DA UI (sem alterações) ---
+        function selectPath(id) {
+            if (selectedPathId) {
+                const oldPath = pathsData.find(p => p.id === selectedPathId);
+                if (oldPath.element) oldPath.element.classList.remove('path-selected');
+            }
+            selectedPathId = id;
+            const path = pathsData.find(p => p.id === id);
+            if (path) {
+                path.element.classList.add('path-selected');
+                pathConfigSection.classList.remove('hidden');
+                noPathSelectedDiv.classList.add('hidden');
+                selectedPathName.textContent = path.name;
+                pathTollSlider.value = path.toll;
+                pathCapacitySlider.value = path.capacity;
+                if (path.name === "Via Expressa") {
+                    variableTollOption.classList.remove('hidden');
+                    variableTollCheckbox.checked = path.isVariableToll;
+                } else {
+                    variableTollOption.classList.add('hidden');
+                }
+                updatePathConfigUI();
+            }
+        }
+
+        function updatePathConfigUI() {
+            if (!selectedPathId) return;
+            const path = pathsData.find(p => p.id === selectedPathId);
+            if (path) {
+                pathTollValue.textContent = `R$ ${parseFloat(path.toll).toFixed(2)}`;
+                pathCapacityValue.textContent = path.capacity;
+                pathLengthValue.textContent = `${path.lengthKm} km`;
+            }
+        }
+
+        function addAgentType(config = {}) {
+            const defaults = { name: `Grupo ${nextAgentTypeId}`, count: 100, income: 50, valueOfTime: 30, color: `hsl(${Math.random() * 360}, 90%, 70%)` };
+            const newType = { id: nextAgentTypeId++, ...defaults, ...config };
+            agentTypes.push(newType);
+            renderAgentTypes();
+        }
+
+        function renderAgentTypes() {
+            agentTypesList.innerHTML = '';
+            agentTypes.forEach(type => {
+                const div = document.createElement('div');
+                div.className = 'p-3 bg-gray-800 rounded-lg agent-type-card';
+                div.setAttribute('data-id', type.id);
+                div.innerHTML = `
+                    <div class="flex justify-between items-center mb-3">
+                        <input type="text" value="${type.name}" data-prop="name" class="bg-gray-700 text-white font-semibold rounded p-1 w-2/3">
+                        <input type="color" value="${type.color}" data-prop="color" class="w-10 h-10 rounded border-none bg-gray-700 cursor-pointer">
+                        <button class="remove-agent-type text-red-400 hover:text-red-300 font-bold text-xl">&times;</button>
+                    </div>
+                    <div class="space-y-3 text-sm">
+                        <div>
+                            <label class="font-medium text-gray-300">Quantidade: <span class="value-display text-blue-400 font-mono">${type.count}</span></label>
+                            <input type="range" data-prop="count" min="1" max="500" value="${type.count}" class="w-full h-2 bg-gray-700 rounded-lg">
+                        </div>
+                        <div>
+                           <label class="font-medium text-gray-300">Renda (R$/h): <span class="value-display text-blue-400 font-mono">R$ ${type.income.toFixed(2)}</span></label>
+                            <input type="range" data-prop="income" min="10" max="200" value="${type.income}" class="w-full h-2 bg-gray-700 rounded-lg">
+                        </div>
+                        <div>
+                            <label class="font-medium text-gray-300">Custo Tempo (%): <span class="value-display text-blue-400 font-mono">${type.valueOfTime}%</span></label>
+                            <input type="range" data-prop="valueOfTime" min="10" max="100" value="${type.valueOfTime}" class="w-full h-2 bg-gray-700 rounded-lg">
+                        </div>
+                    </div>
+                `;
+                agentTypesList.appendChild(div);
+            });
+        }
+        
+        // --- LÓGICA DA SIMULAÇÃO ---
+        function toggleSimulation() {
+            simulation.isRunning = !simulation.isRunning;
+            if (simulation.isRunning) {
+                if (runSimulationButton.textContent.includes("Iniciar")) {
+                    prepareSimulation();
+                }
+                runSimulationButton.textContent = "Pausar Simulação";
+                document.getElementById('config-panel').classList.add('pointer-events-none', 'opacity-50');
+                simulation.animationFrameId = requestAnimationFrame(simulationStep);
+            } else {
+                cancelAnimationFrame(simulation.animationFrameId);
+                runSimulationButton.textContent = "Continuar Simulação";
+            }
+        }
+        
+        function fullResetSimulation() {
+             simulation.isRunning = false;
+             cancelAnimationFrame(simulation.animationFrameId);
+             prepareSimulation();
+             agentsLayer.innerHTML = '';
+             resetCharts();
+             runSimulationButton.textContent = "Iniciar Simulação";
+             document.getElementById('config-panel').classList.remove('pointer-events-none', 'opacity-50');
+             simulationResultsDiv.innerHTML = '';
+        }
+
+        function prepareSimulation() {
+            simulation.agents = [];
+            simulation.agentPool = [];
+            agentTypes.forEach(type => {
+                for (let i = 0; i < type.count; i++) {
+                    simulation.agentPool.push({ agentType: type });
+                }
+            });
+            simulation.totalAgentCount = simulation.agentPool.length;
+            for (let i = simulation.agentPool.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [simulation.agentPool[i], simulation.agentPool[j]] = [simulation.agentPool[j], simulation.agentPool[i]];
+            }
+            pathsData.forEach(p => {
+                simulation.pathStats[p.id] = { currentAgents: 0 };
+            });
+        }
+
+        function simulationStep() {
+            if (!simulation.isRunning) return;
+            simulation.time++;
+            if (simulation.agentPool.length > 0) {
+                spawnAgent();
+            }
+            moveAgents();
+            updateResultsUI();
+            if (simulation.time % 30 === 0) { // Atualiza os gráficos a cada meio segundo (aprox)
+                updateCharts();
+            }
+            simulation.animationFrameId = requestAnimationFrame(simulationStep);
+        }
+        
+        function calculatePathCost(path, agentType) {
+            const stats = simulation.pathStats[path.id];
+            const valueOfTimePerHour = agentType.income * (agentType.valueOfTime / 100);
+            const v_c = Math.min(stats.currentAgents / path.capacity, 5);
+            const freeFlowTimeHours = path.lengthKm / path.baseSpeed;
+            const congestedTimeHours = freeFlowTimeHours * (1 + 0.15 * Math.pow(v_c, 4));
+            
+            let intersectionDelayHours = 0;
+            path.intersections.forEach(intId => {
+                const intersection = intersectionsData.find(i => i.id === intId);
+                if (intersection) intersectionDelayHours += intersection.delaySeconds / 3600;
+            });
+            const totalTimeHours = congestedTimeHours + intersectionDelayHours;
+            const timeCost = totalTimeHours * valueOfTimePerHour;
+            let currentToll = path.toll;
+            if (path.isVariableToll) {
+                currentToll += 20 * v_c;
+            }
+            return currentToll + timeCost;
+        }
+
+        function spawnAgent() {
+            const agentToSpawn = simulation.agentPool.pop();
+            if (!agentToSpawn) return;
+            
+            const agentType = agentToSpawn.agentType;
+            const bestPath = chooseBestPath(agentType);
+            const dot = document.createElementNS("http://www.w3.org/2000/svg", 'circle');
+            dot.setAttribute('r', '5');
+            dot.setAttribute('fill', agentType.color);
+            
+            const agent = { pathId: bestPath.id, progress: 0, element: dot, agentType: agentType };
+            
+            simulation.agents.push(agent);
+            simulation.pathStats[bestPath.id].currentAgents++;
+            agentsLayer.appendChild(dot);
+        }
+
+        function chooseBestPath(agentType) {
+            let minCost = Infinity, bestPath = null;
+            pathsData.forEach(path => {
+                const cost = calculatePathCost(path, agentType);
+                if (cost < minCost) {
+                    minCost = cost;
+                    bestPath = path;
+                }
+            });
+            return bestPath || pathsData[0];
+        }
+
+        function moveAgents() {
+             const agentsToRemove = [];
+             simulation.agents.forEach((agent, index) => {
+                const path = pathsData.find(p => p.id === agent.pathId);
+                const v_c = simulation.pathStats[path.id].currentAgents / path.capacity;
+                const speedFactor = 1 / (1 + 0.5 * Math.pow(v_c, 4));
+                const movementPerFrame = path.pathLength * (path.baseSpeed / 3600 / 60) * speedFactor;
+                agent.progress += movementPerFrame;
+
+                if (agent.progress >= path.pathLength) {
+                    agentsToRemove.push(index);
+                    agent.element.remove();
+                    simulation.pathStats[path.id].currentAgents--;
+                } else {
+                    const point = path.element.getPointAtLength(agent.progress);
+                    agent.element.setAttribute('transform', `translate(${point.x}, ${point.y})`);
+                }
+            });
+            for (let i = agentsToRemove.length - 1; i >= 0; i--) {
+                simulation.agents.splice(agentsToRemove[i], 1);
+            }
+        }
+
+        function updateResultsUI() {
+            let resultsHTML = '<h3 class="font-semibold text-cyan-400 mb-2">Status das Vias:</h3><ul class="space-y-1">';
+            pathsData.forEach(path => {
+                const stats = simulation.pathStats[path.id];
+                const congestion = stats.currentAgents / path.capacity;
+                let congestionColor = 'text-green-400';
+                if (congestion > 0.7) congestionColor = 'text-yellow-400';
+                if (congestion > 0.9) congestionColor = 'text-red-400';
+                resultsHTML += `<li class="p-1.5 bg-gray-700/50 rounded-md text-xs"><strong class="text-white">${path.name}</strong> | Agentes: ${stats.currentAgents} | <span class="${congestionColor}">V/C: ${congestion.toFixed(2)}</span></li>`;
+            });
+            const spawnedCount = simulation.totalAgentCount - simulation.agentPool.length;
+            resultsHTML += `</ul><p class="mt-2 text-xs text-gray-400">Total: ${spawnedCount}/${simulation.totalAgentCount} indivíduos na via</p>`;
+            simulationResultsDiv.innerHTML = resultsHTML;
+        }
+        
+        function initializeDefaultAgentGroups() {
+            addAgentType({ name: "Trabalhadores", count: 250, income: 30, valueOfTime: 25, color: "#3b82f6" });
+            addAgentType({ name: "Executivos", count: 50, income: 150, valueOfTime: 80, color: "#ef4444" });
+            addAgentType({ name: "Logística", count: 100, income: 60, valueOfTime: 15, color: "#22c55e" });
+        }
+
+        // --- EVENT LISTENERS ---
+        addAgentTypeButton.addEventListener('click', () => addAgentType());
+        runSimulationButton.addEventListener('click', toggleSimulation);
+        resetSimulationButton.addEventListener('click', fullResetSimulation);
+        window.addEventListener('resize', createMap);
+        
+        agentTypesList.addEventListener('input', (e) => {
+            const card = e.target.closest('.agent-type-card');
+            if (!card) return;
+            const id = parseInt(card.dataset.id);
+            const type = agentTypes.find(t => t.id === id);
+            if (!type) return;
+
+            const prop = e.target.dataset.prop;
+            const value = e.target.type === 'range' ? parseFloat(e.target.value) : e.target.value;
+            type[prop] = value;
+            
+            if (e.target.type === 'range') {
+                 const display = e.target.closest('div').querySelector('.value-display');
+                 if (prop === 'income') display.textContent = `R$ ${value.toFixed(2)}`;
+                 else if (prop === 'valueOfTime') display.textContent = `${value}%`;
+                 else display.textContent = value;
+            }
+        });
+
+        agentTypesList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('remove-agent-type')) {
+                const id = parseInt(e.target.closest('.agent-type-card').dataset.id);
+                agentTypes = agentTypes.filter(t => t.id !== id);
+                renderAgentTypes();
+            }
+        });
+
+        pathTollSlider.addEventListener('input', (e) => { if(selectedPathId) { pathsData.find(p => p.id === selectedPathId).toll = parseFloat(e.target.value); updatePathConfigUI(); }});
+        pathCapacitySlider.addEventListener('input', (e) => { if(selectedPathId) { pathsData.find(p => p.id === selectedPathId).capacity = parseInt(e.target.value); updatePathConfigUI(); }});
+        variableTollCheckbox.addEventListener('change', (e) => { if(selectedPathId) { pathsData.find(p => p.id === selectedPathId).isVariableToll = e.target.checked; }});
+
+        // --- INICIALIZAÇÃO ---
+        createMap();
+        initializeCharts();
+        initializeDefaultAgentGroups();
+    });
+    </script>
+</body>
+</html>
+
+
